@@ -45,7 +45,7 @@ export class GlossaryBotApp extends App implements IPostMessageSent {
 	}
 
 	/**
-	 * Возвращает e-mail пользователя или fallback
+refactoring	 * Возвращает e-mail пользователя
 	 */
 	private getUserEmail(user: IUser): string {
 		const primaryEmail = user.emails?.find(email => email.verified) ?? user.emails?.[0];
@@ -167,7 +167,7 @@ export class GlossaryBotApp extends App implements IPostMessageSent {
 
 		const association = this.getAssociationForKey(key);
 		await persistence.removeByAssociation(association);
-		this.getLogger().info('Ключ удален из БД', { key: this.normalizeKey(key) });
+		this.getLogger().debug('Ключ удален из БД', { key: this.normalizeKey(key) });
 		return true;
 	}
 
@@ -200,7 +200,7 @@ export class GlossaryBotApp extends App implements IPostMessageSent {
 			await this.saveValuesForKey(persistence, key, filtered);
 		}
 
-		this.getLogger().info('Значение удалено из БД', { key: this.normalizeKey(key), value });
+		this.getLogger().debug('Значение удалено из БД', { key: this.normalizeKey(key), value });
 		return true;
 	}
 
@@ -240,7 +240,7 @@ export class GlossaryBotApp extends App implements IPostMessageSent {
 				.join('\n')}`;
 		}
 		await this.sendMessage(modify, room, text);
-		this.getLogger().info('Значения отправлены пользователю', { key, count: values.length });
+		this.getLogger().debug('Значения отправлены пользователю', { key, count: values.length });
 	}
 
 	/**
@@ -284,7 +284,7 @@ export class GlossaryBotApp extends App implements IPostMessageSent {
 			return;
 		}
 
-		this.getLogger().info('Обработка команды добавления значения', { key: pair.key, value: pair.value });
+		this.getLogger().debug('Обработка команды добавления значения', { key: pair.key, value: pair.value });
 
 		const result = await this.addValueToKey(read, persistence, pair.key, pair.value, message.sender);
 
@@ -570,7 +570,7 @@ export class GlossaryBotApp extends App implements IPostMessageSent {
 		persistence: IPersistence,
 		modify: IModify
 	): Promise<void> {
-		this.getLogger().info('Получено сообщение', {
+		this.getLogger().debug('Получено сообщение', {
 			messageId: message.id,
 			roomId: message.room.id,
 			roomType: message.room.type,
@@ -599,7 +599,7 @@ export class GlossaryBotApp extends App implements IPostMessageSent {
 		// Обрабатываем команды
 		const commandType = this.getCommandType(text);
 		if (commandType) {
-			this.getLogger().info('Обнаружена команда', { commandType });
+			this.getLogger().debug('Обнаружена команда', { commandType });
 
 			switch (commandType) {
 				case this.COMMANDS.ADD:
@@ -626,18 +626,18 @@ export class GlossaryBotApp extends App implements IPostMessageSent {
 
 		// Иначе обрабатываем как ключ для поиска
 		const key = text;
-		this.getLogger().info('Обработка ключа', { key, senderId: message.sender.id });
+		this.getLogger().debug('Обработка ключа', { key, senderId: message.sender.id });
 
 		// Получаем значения для ключа из БД
 		const values = await this.getValuesForKey(read, key);
 
 		if (values && values.length > 0) {
 			// Если значения найдены, отправляем их
-			this.getLogger().info('Найдены значения для ключа', { key, count: values.length });
+			this.getLogger().debug('Найдены значения для ключа', { key, count: values.length });
 			await this.sendValuesToUser(modify, message.room, key, values);
 		} else {
 			// Если значений нет, предлагаем добавить
-			this.getLogger().info('Значения не найдены, предлагаем добавить', { key });
+			this.getLogger().debug('Значения не найдены, предлагаем добавить', { key });
 			await this.sendMessage(
 				modify,
 				message.room,
