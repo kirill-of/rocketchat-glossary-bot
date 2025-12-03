@@ -1,0 +1,18 @@
+{
+    "id": "3e8b376d-fa31-49c6-babe-c438b0d1777b",
+    "version": "0.0.1",
+    "requiredApiVersion": "^1.31.0",
+    "iconFile": "icon.png",
+    "author": {
+        "name": "Kirill Of",
+        "homepage": "https://github.com/kirill-of/rocketchat-glossary-bot",
+        "support": "https://github.com/kirill-of/rocketchat-glossary-bot"
+    },
+    "name": "Глоссарий",
+    "nameSlug": "glossary-bot",
+    "classFile": "GlossaryBotApp.ts",
+    "description": "Бот для создания глоссария (Справочника аббревиатур, сокращений и терминов)",
+    "implements": [
+        "IPostMessageSent"
+    ]
+}
