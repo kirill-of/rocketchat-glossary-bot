@@ -23,15 +23,46 @@ interface GlossaryValue {
 	createdBy: string;
 }
 
-export class GlossaryBotApp extends App implements IPostMessageSent {
-	private readonly COMMAND_PREFIX = '!';
-	private readonly COMMANDS = {
+interface GlossaryEntry {
+	values: GlossaryValue[];
+}
+
+interface AddValueResult {
+	added: boolean;
+	reason?: 'duplicate' | 'error';
+}
+
+type CommandType = 'add' | 'multi-add' | 'remove' | 'details' | 'help' | null;
+
+export default class GlossaryBotApp extends App implements IPostMessageSent {
+	private static readonly COMMAND_PREFIX = '!' as const;
+	private static readonly ROOM_TYPE_DIRECT = 'd' as const;
+
+	private static readonly COMMANDS = {
 		ADD: 'add',
 		MULTI_ADD: 'multi-add',
 		REMOVE: 'remove',
 		DETAILS: 'details',
 		HELP: 'help',
-	};
+	} as const;
+
+	private static readonly MESSAGES = {
+		INVALID_ADD_FORMAT: '❌ Неверный формат команды. Используйте: `!add <ключ>:<значение>`',
+		INVALID_MULTI_ADD_FORMAT: '❌ Неверный формат команды. Используйте:\n`!multi-add\n<ключ1>:<значение1>;\n<ключ2>:<значение2>;`',
+		INVALID_REMOVE_FORMAT:
+			'❌ Неверный формат команды. Используйте:\n`!remove <ключ>` - удалить весь ключ\n`!remove <ключ>:<значение>` - удалить конкретное значение',
+		INVALID_DETAILS_FORMAT: '❌ Неверный формат команды. Используйте: `!details <ключ>:<значение>`',
+		INVALID_SEARCH_KEY: '❌ Ключ не должен быть пустым.',
+		VALUE_ADDED: (key: string, value: string) => `✅ Значение успешно добавлено для ключа "*${key}*":\n${value}`,
+		DUPLICATE_VALUE: (key: string) => `❌ Такое значение уже существует для ключа "*${key}*".`,
+		SAVE_ERROR: '❌ Произошла ошибка при сохранении.',
+		VALUE_REMOVED: (key: string, value: string) => `✅ Значение "*${value}*" успешно удалено для ключа "*${key}*"`,
+		VALUE_NOT_FOUND: (key: string, value: string) => `❌ Значение "*${value}*" не найдено для ключа "*${key}*"`,
+		KEY_REMOVED: (key: string) => `✅ Ключ "*${key}*" и все его значения успешно удалены`,
+		KEY_NOT_FOUND: (key: string) => `❌ Ключ "*${key}*" не найден`,
+		KEY_NOT_FOUND_SEARCH: (key: string) =>
+			`Значение для ключа "*${key}*" не найдено.\n\nЧтобы добавить значение, используйте команду:\n\`!add ${key}: <ваше значение>\``,
+	} as const;
 
 	constructor(info: IAppInfo, logger: ILogger, accessors: IAppAccessors) {
 		super(info, logger, accessors);
@@ -41,11 +72,23 @@ export class GlossaryBotApp extends App implements IPostMessageSent {
 	 * Нормализует ключ (приводит к нижнему регистру для регистронезависимого поиска)
 	 */
 	private normalizeKey(key: string): string {
-		return key.trim().toLowerCase();
+		return key?.trim().toLowerCase() || '';
+	}
+
+	private isValidKey(key: string): boolean {
+		return this.normalizeKey(key).length > 0;
+	}
+
+	private normalizeValue(value: string): string {
+		return value?.trim().toLowerCase() || '';
+	}
+
+	private isValidValue(value: string): boolean {
+		return this.normalizeValue(value).length > 0;
 	}
 
 	/**
-refactoring	 * Возвращает e-mail пользователя
+	 * Возвращает e-mail пользователя
 	 */
 	private getUserEmail(user: IUser): string {
 		const primaryEmail = user.emails?.find(email => email.verified) ?? user.emails?.[0];
@@ -53,8 +96,12 @@ refactoring	 * Возвращает e-mail пользователя
 	}
 
 	private formatDate(dateIso: string): string {
+		if (!dateIso) {
+			return 'неизвестно';
+		}
+
 		const date = new Date(dateIso);
-		return isNaN(date.getTime()) ? dateIso : date.toLocaleString();
+		return isNaN(date.getTime()) ? dateIso : date.toLocaleString('ru-RU');
 	}
 
 	/**
@@ -74,6 +121,10 @@ refactoring	 * Возвращает e-mail пользователя
 		read: IRead,
 		key: string
 	): Promise<GlossaryValue[] | null> {
+		if (!this.isValidKey(key)) {
+			return null;
+		}
+
 		try {
 			const association = this.getAssociationForKey(key);
 			const records = await read.getPersistenceReader().readByAssociation(association);
@@ -82,8 +133,10 @@ refactoring	 * Возвращает e-mail пользователя
 				return null;
 			}
 
-			const [entry] = records as Array<{ values?: GlossaryValue[] }>;
-			if (!entry?.values || entry.values.length === 0) {
+			const [rawEntry] = records;
+			const entry = rawEntry as GlossaryEntry;
+
+			if (!entry?.values || !Array.isArray(entry.values) || entry.values.length === 0) {
 				return null;
 			}
 
@@ -99,7 +152,13 @@ refactoring	 * Возвращает e-mail пользователя
 	 */
 	private async getValuesForKey(read: IRead, key: string): Promise<string[] | null> {
 		const entry = await this.getEntryForKey(read, key);
-		return entry ? entry.map(item => item.value) : null;
+		if (!entry) {
+			return null;
+		}
+
+		return entry
+			.map(item => item.value)
+			.filter((value): value is string => Boolean(value));
 	}
 
 	/**
@@ -110,6 +169,10 @@ refactoring	 * Возвращает e-mail пользователя
 		key: string,
 		values: GlossaryValue[]
 	): Promise<void> {
+		if (!this.isValidKey(key)) {
+			throw new Error('Cannot save values: invalid key');
+		}
+
 		const association = this.getAssociationForKey(key);
 		await persistence.removeByAssociation(association);
 		await persistence.createWithAssociation({ values }, association);
@@ -124,11 +187,16 @@ refactoring	 * Возвращает e-mail пользователя
 		key: string,
 		value: string,
 		user: IUser
-	): Promise<{ added: boolean; reason?: string }> {
+	): Promise<AddValueResult> {
+		if (!this.isValidKey(key) || !this.isValidValue(value)) {
+			return { added: false, reason: 'error' };
+		}
+
 		try {
 			const normalizedValue = value.trim();
+			const normalizedValueKey = this.normalizeValue(normalizedValue);
 			const existingValues = (await this.getEntryForKey(read, key)) ?? [];
-			const hasDuplicate = existingValues.some(item => item.value.toLowerCase() === normalizedValue.toLowerCase());
+			const hasDuplicate = existingValues.some(item => this.normalizeValue(item.value) === normalizedValueKey);
 
 			if (hasDuplicate) {
 				return { added: false, reason: 'duplicate' };
@@ -160,15 +228,24 @@ refactoring	 * Возвращает e-mail пользователя
 		persistence: IPersistence,
 		key: string
 	): Promise<boolean> {
+		if (!this.isValidKey(key)) {
+			return false;
+		}
+
 		const entry = await this.getEntryForKey(read, key);
 		if (!entry) {
 			return false;
 		}
 
-		const association = this.getAssociationForKey(key);
-		await persistence.removeByAssociation(association);
-		this.getLogger().debug('Ключ удален из БД', { key: this.normalizeKey(key) });
-		return true;
+		try {
+			const association = this.getAssociationForKey(key);
+			await persistence.removeByAssociation(association);
+			this.getLogger().debug('Ключ удален из БД', { key: this.normalizeKey(key) });
+			return true;
+		} catch (error) {
+			this.getLogger().error('Ошибка при удалении ключа', { key, error });
+			return false;
+		}
 	}
 
 	/**
@@ -180,28 +257,41 @@ refactoring	 * Возвращает e-mail пользователя
 		key: string,
 		value: string
 	): Promise<boolean> {
+		if (!this.isValidKey(key) || !this.isValidValue(value)) {
+			return false;
+		}
+
 		const entry = await this.getEntryForKey(read, key);
 		if (!entry || entry.length === 0) {
 			return false;
 		}
 
-		const filtered = entry.filter(
-			item => item.value.toLowerCase() !== value.trim().toLowerCase()
-		);
+		const normalizedValue = this.normalizeValue(value);
+		const filtered = entry.filter(item => {
+			if (!item?.value) {
+				return true;
+			}
+			return this.normalizeValue(item.value) !== normalizedValue;
+		});
 
 		if (filtered.length === entry.length) {
 			return false;
 		}
 
-		if (filtered.length === 0) {
-			const association = this.getAssociationForKey(key);
-			await persistence.removeByAssociation(association);
-		} else {
-			await this.saveValuesForKey(persistence, key, filtered);
-		}
+		try {
+			if (filtered.length === 0) {
+				const association = this.getAssociationForKey(key);
+				await persistence.removeByAssociation(association);
+			} else {
+				await this.saveValuesForKey(persistence, key, filtered);
+			}
 
-		this.getLogger().debug('Значение удалено из БД', { key: this.normalizeKey(key), value });
-		return true;
+			this.getLogger().debug('Значение удалено из БД', { key: this.normalizeKey(key), value });
+			return true;
+		} catch (error) {
+			this.getLogger().error('Ошибка при удалении значения', { key, value, error });
+			return false;
+		}
 	}
 
 	/**
@@ -212,6 +302,11 @@ refactoring	 * Возвращает e-mail пользователя
 		room: IRoom,
 		text: string
 	): Promise<void> {
+		if (!room || !text?.trim()) {
+			this.getLogger().warn('Попытка отправить пустое сообщение или в несуществующую комнату');
+			return;
+		}
+
 		try {
 			const messageBuilder = modify.getCreator().startMessage();
 			messageBuilder.setRoom(room);
@@ -231,35 +326,56 @@ refactoring	 * Возвращает e-mail пользователя
 		key: string,
 		values: string[]
 	): Promise<void> {
-		let text: string;
-		if (values.length === 1) {
-			text = `*Ключ:* ${key}\n*Значение:* ${values[0]}`;
-		} else {
-			text = `*Ключ:* ${key}\n*Значения (${values.length}):*\n${values
-				.map((v, i) => `${i + 1}. ${v}`)
-				.join('\n')}`;
+		if (!values || values.length === 0) {
+			return;
 		}
-		await this.sendMessage(modify, room, text);
+
+		const formatted = this.formatValuesForDisplay(key, values);
+		await this.sendMessage(modify, room, formatted);
 		this.getLogger().debug('Значения отправлены пользователю', { key, count: values.length });
+	}
+
+	private formatValuesForDisplay(key: string, values: string[]): string {
+		if (values.length === 1) {
+			return `*Ключ:* ${key}\n*Значение:* ${values[0]}`;
+		}
+
+		const lines = values.map((value, index) => `${index + 1}. ${value}`).join('\n');
+		return `*Ключ:* ${key}\n*Значения (${values.length}):*\n${lines}`;
 	}
 
 	/**
 	 * Парсит команду добавления значения (формат: "ключ:значение")
 	 */
 	private parseKeyValue(text: string): KeyValuePair | null {
+		if (!text) {
+			return null;
+		}
+
 		const colonIndex = text.indexOf(':');
-		if (colonIndex === -1) {
+		if (colonIndex <= 0) {
 			return null;
 		}
 
 		const key = text.substring(0, colonIndex).trim();
 		const value = text.substring(colonIndex + 1).trim();
 
-		if (!key || !value) {
+		if (!this.isValidKey(key) || !this.isValidValue(value)) {
 			return null;
 		}
 
 		return { key, value };
+	}
+
+	private extractCommandPayload(text: string, command: string): string {
+		const trimmed = text?.trim() || '';
+		const prefix = `${GlossaryBotApp.COMMAND_PREFIX}${command}`;
+
+		if (!trimmed.toLowerCase().startsWith(prefix)) {
+			return '';
+		}
+
+		return trimmed.substring(prefix.length).trim();
 	}
 
 	/**
@@ -272,38 +388,24 @@ refactoring	 * Возвращает e-mail пользователя
 		modify: IModify
 	): Promise<void> {
 		const text = message.text?.trim() || '';
-		const commandText = text.substring(this.COMMAND_PREFIX.length + this.COMMANDS.ADD.length).trim();
+		const commandText = this.extractCommandPayload(text, GlossaryBotApp.COMMANDS.ADD);
 		
 		const pair = this.parseKeyValue(commandText);
 		if (!pair) {
-			await this.sendMessage(
-				modify,
-				message.room,
-				'❌ Неверный формат команды. Используйте: `!add <ключ>:<значение>`'
-			);
+			await this.sendMessage(modify, message.room, GlossaryBotApp.MESSAGES.INVALID_ADD_FORMAT);
 			return;
 		}
 
-		this.getLogger().debug('Обработка команды добавления значения', { key: pair.key, value: pair.value });
+		this.getLogger().info('Обработка команды добавления значения', { key: pair.key, value: pair.value });
 
 		const result = await this.addValueToKey(read, persistence, pair.key, pair.value, message.sender);
+		const responseText = result.added
+			? GlossaryBotApp.MESSAGES.VALUE_ADDED(pair.key, pair.value)
+			: result.reason === 'duplicate'
+				? GlossaryBotApp.MESSAGES.DUPLICATE_VALUE(pair.key)
+				: GlossaryBotApp.MESSAGES.SAVE_ERROR;
 
-		if (result.added) {
-			await this.sendMessage(
-				modify,
-				message.room,
-				`✅ Значение успешно добавлено для ключа "*${pair.key}*":\n${pair.value}`
-			);
-		} else {
-			const reasonText = result.reason === 'duplicate'
-				? `Такое значение уже существует для ключа "*${pair.key}*".`
-				: 'Произошла ошибка при сохранении.';
-			await this.sendMessage(
-				modify,
-				message.room,
-				`❌ ${reasonText}`
-			);
-		}
+		await this.sendMessage(modify, message.room, responseText);
 	}
 
 	/**
@@ -336,15 +438,11 @@ refactoring	 * Возвращает e-mail пользователя
 		modify: IModify
 	): Promise<void> {
 		const text = message.text?.trim() || '';
-		const commandText = text.substring(this.COMMAND_PREFIX.length + this.COMMANDS.MULTI_ADD.length).trim();
+		const commandText = this.extractCommandPayload(text, GlossaryBotApp.COMMANDS.MULTI_ADD);
 		
 		const pairs = this.parseMultiAdd(commandText);
 		if (pairs.length === 0) {
-			await this.sendMessage(
-				modify,
-				message.room,
-				'❌ Неверный формат команды. Используйте:\n`!multi-add\n<ключ1>:<значение1>;\n<ключ2>:<значение2>;`'
-			);
+			await this.sendMessage(modify, message.room, GlossaryBotApp.MESSAGES.INVALID_MULTI_ADD_FORMAT);
 			return;
 		}
 
@@ -358,25 +456,22 @@ refactoring	 * Возвращает e-mail пользователя
 			const result = await this.addValueToKey(read, persistence, pair.key, pair.value, message.sender);
 			if (result.added) {
 				added += 1;
-				continue;
-			}
-
-			if (result.reason === 'duplicate') {
+			} else if (result.reason === 'duplicate') {
 				duplicates += 1;
 			} else {
 				errors += 1;
 			}
 		}
 
-		let responseText = `✅ Добавлено значений: ${added}`;
+		const responseParts = [`✅ Добавлено значений: ${added}`];
 		if (duplicates > 0) {
-			responseText += `\n⚠️ Пропущено дубликатов: ${duplicates}`;
+			responseParts.push(`⚠️ Пропущено дубликатов: ${duplicates}`);
 		}
 		if (errors > 0) {
-			responseText += `\n❌ Ошибок: ${errors}`;
+			responseParts.push(`❌ Ошибок: ${errors}`);
 		}
 
-		await this.sendMessage(modify, message.room, responseText);
+		await this.sendMessage(modify, message.room, responseParts.join('\n'));
 	}
 
 	/**
@@ -389,57 +484,32 @@ refactoring	 * Возвращает e-mail пользователя
 		modify: IModify
 	): Promise<void> {
 		const text = message.text?.trim() || '';
-		const commandText = text.substring(this.COMMAND_PREFIX.length + this.COMMANDS.REMOVE.length).trim();
-		
+		const commandText = this.extractCommandPayload(text, GlossaryBotApp.COMMANDS.REMOVE);
+
 		const pair = this.parseKeyValue(commandText);
-		
+
 		if (pair) {
-			// Удаляем конкретное значение
 			this.getLogger().info('Обработка команды удаления значения', { key: pair.key, value: pair.value });
 			const removed = await this.removeValueForKey(read, persistence, pair.key, pair.value);
-			
-			if (removed) {
-				await this.sendMessage(
-					modify,
-					message.room,
-					`✅ Значение "*${pair.value}*" успешно удалено для ключа "*${pair.key}*"`
-				);
-			} else {
-				await this.sendMessage(
-					modify,
-					message.room,
-					`❌ Значение "*${pair.value}*" не найдено для ключа "*${pair.key}*"`
-				);
-			}
-		} else {
-			// Удаляем весь ключ
-			const key = commandText.trim();
-			if (!key) {
-				await this.sendMessage(
-					modify,
-					message.room,
-					'❌ Неверный формат команды. Используйте:\n`!remove <ключ>` - удалить весь ключ\n`!remove <ключ>:<значение>` - удалить конкретное значение'
-				);
-				return;
-			}
-
-			this.getLogger().info('Обработка команды удаления ключа', { key });
-			const removed = await this.removeKey(read, persistence, key);
-			
-			if (removed) {
-				await this.sendMessage(
-					modify,
-					message.room,
-					`✅ Ключ "*${key}*" и все его значения успешно удалены`
-				);
-			} else {
-				await this.sendMessage(
-					modify,
-					message.room,
-					`❌ Ключ "*${key}*" не найден`
-				);
-			}
+			const responseText = removed
+				? GlossaryBotApp.MESSAGES.VALUE_REMOVED(pair.key, pair.value)
+				: GlossaryBotApp.MESSAGES.VALUE_NOT_FOUND(pair.key, pair.value);
+			await this.sendMessage(modify, message.room, responseText);
+			return;
 		}
+
+		const key = commandText.trim();
+		if (!this.isValidKey(key)) {
+			await this.sendMessage(modify, message.room, GlossaryBotApp.MESSAGES.INVALID_REMOVE_FORMAT);
+			return;
+		}
+
+		this.getLogger().info('Обработка команды удаления ключа', { key });
+		const removed = await this.removeKey(read, persistence, key);
+		const responseText = removed
+			? GlossaryBotApp.MESSAGES.KEY_REMOVED(key)
+			: GlossaryBotApp.MESSAGES.KEY_NOT_FOUND(key);
+		await this.sendMessage(modify, message.room, responseText);
 	}
 
 	/**
@@ -451,40 +521,39 @@ refactoring	 * Возвращает e-mail пользователя
 		modify: IModify
 	): Promise<void> {
 		const text = message.text?.trim() || '';
-		const commandText = text.substring(this.COMMAND_PREFIX.length + this.COMMANDS.DETAILS.length).trim();
+		const commandText = this.extractCommandPayload(text, GlossaryBotApp.COMMANDS.DETAILS);
 		const pair = this.parseKeyValue(commandText);
 
 		if (!pair) {
-			await this.sendMessage(
-				modify,
-				message.room,
-				'❌ Неверный формат команды. Используйте: `!details <ключ>:<значение>`'
-			);
+			await this.sendMessage(modify, message.room, GlossaryBotApp.MESSAGES.INVALID_DETAILS_FORMAT);
 			return;
 		}
 
 		const entry = await this.getEntryForKey(read, pair.key);
 		if (!entry) {
-			await this.sendMessage(modify, message.room, `❌ Ключ "*${pair.key}*" не найден`);
+			await this.sendMessage(modify, message.room, GlossaryBotApp.MESSAGES.KEY_NOT_FOUND(pair.key));
 			return;
 		}
 
-		const valueInfo = entry.find(item => item.value.toLowerCase() === pair.value.trim().toLowerCase());
+		const normalizedValue = this.normalizeValue(pair.value);
+		const valueInfo = entry.find(item => this.normalizeValue(item.value) === normalizedValue);
 		if (!valueInfo) {
 			await this.sendMessage(
 				modify,
 				message.room,
-				`❌ Значение "*${pair.value}*" не найдено для ключа "*${pair.key}*"`
+				GlossaryBotApp.MESSAGES.VALUE_NOT_FOUND(pair.key, pair.value)
 			);
 			return;
 		}
 
 		const formattedDate = this.formatDate(valueInfo.createdAt);
-		await this.sendMessage(
-			modify,
-			message.room,
-			`*Ключ:* ${pair.key}\n*Значение:* ${valueInfo.value}\n*Добавлено:* ${formattedDate}\n*Автор:* ${valueInfo.createdBy}`
-		);
+		const detailsText =
+			`*Ключ:* ${pair.key}\n` +
+			`*Значение:* ${valueInfo.value}\n` +
+			`*Добавлено:* ${formattedDate}\n` +
+			`*Автор:* ${valueInfo.createdBy}`;
+
+		await this.sendMessage(modify, message.room, detailsText);
 	}
 
 	/**
@@ -518,11 +587,85 @@ refactoring	 * Возвращает e-mail пользователя
 		await this.sendMessage(modify, room, helpText);
 	}
 
+	private async shouldProcessMessage(message: IMessage, read: IRead): Promise<boolean> {
+		if (message.room.type !== GlossaryBotApp.ROOM_TYPE_DIRECT) {
+			this.getLogger().debug('Сообщение не является приватным, игнорируем');
+			return false;
+		}
+
+		const appUser = await read.getUserReader().getAppUser();
+		if (!appUser || message.sender.id === appUser.id) {
+			this.getLogger().debug('Сообщение от самого бота, игнорируем');
+			return false;
+		}
+
+		if (!message.text?.trim()) {
+			this.getLogger().debug('Пустое сообщение, игнорируем');
+			return false;
+		}
+
+		return true;
+	}
+
+	private async handleKeySearch(
+		key: string,
+		read: IRead,
+		modify: IModify,
+		room: IRoom
+	): Promise<void> {
+		if (!this.isValidKey(key)) {
+			await this.sendMessage(modify, room, GlossaryBotApp.MESSAGES.INVALID_SEARCH_KEY);
+			return;
+		}
+
+		this.getLogger().info('Обработка ключа', { key });
+		const values = await this.getValuesForKey(read, key);
+
+		if (values && values.length > 0) {
+			this.getLogger().info('Найдены значения для ключа', { key, count: values.length });
+			await this.sendValuesToUser(modify, room, key, values);
+		} else {
+			this.getLogger().info('Значения не найдены, предлагаем добавить', { key });
+			await this.sendMessage(modify, room, GlossaryBotApp.MESSAGES.KEY_NOT_FOUND_SEARCH(key));
+		}
+	}
+
+	private async executeCommand(
+		commandType: CommandType,
+		message: IMessage,
+		read: IRead,
+		persistence: IPersistence,
+		modify: IModify
+	): Promise<void> {
+		const { ADD, MULTI_ADD, REMOVE, DETAILS, HELP } = GlossaryBotApp.COMMANDS;
+
+		switch (commandType) {
+			case ADD:
+				await this.handleAddCommand(message, read, persistence, modify);
+				return;
+			case MULTI_ADD:
+				await this.handleMultiAddCommand(message, read, persistence, modify);
+				return;
+			case REMOVE:
+				await this.handleRemoveCommand(message, read, persistence, modify);
+				return;
+			case DETAILS:
+				await this.handleDetailsCommand(message, read, modify);
+				return;
+			case HELP:
+				await this.handleHelpCommand(modify, message.room);
+				return;
+			default:
+				this.getLogger().warn('Неизвестный тип команды', { commandType });
+		}
+	}
+
 	/**
 	 * Проверяет, является ли сообщение командой
 	 */
 	private isCommand(text: string): boolean {
-		return text.trim().startsWith(this.COMMAND_PREFIX);
+		const trimmed = text?.trim() || '';
+		return trimmed.startsWith(GlossaryBotApp.COMMAND_PREFIX);
 	}
 
 	private matchesCommand(text: string, command: string): boolean {
@@ -531,7 +674,7 @@ refactoring	 * Возвращает e-mail пользователя
 		}
 
 		const trimmed = text.trim();
-		const prefix = `${this.COMMAND_PREFIX}${command}`;
+		const prefix = `${GlossaryBotApp.COMMAND_PREFIX}${command}`;
 		if (!trimmed.startsWith(prefix)) {
 			return false;
 		}
@@ -543,21 +686,23 @@ refactoring	 * Возвращает e-mail пользователя
 	/**
 	 * Определяет тип команды
 	 */
-	private getCommandType(text: string): string | null {
-		if (this.matchesCommand(text, this.COMMANDS.ADD)) {
-			return this.COMMANDS.ADD;
+	private getCommandType(text: string): CommandType {
+		const { ADD, MULTI_ADD, REMOVE, DETAILS, HELP } = GlossaryBotApp.COMMANDS;
+
+		if (this.matchesCommand(text, ADD)) {
+			return ADD;
 		}
-		if (this.matchesCommand(text, this.COMMANDS.MULTI_ADD)) {
-			return this.COMMANDS.MULTI_ADD;
+		if (this.matchesCommand(text, MULTI_ADD)) {
+			return MULTI_ADD;
 		}
-		if (this.matchesCommand(text, this.COMMANDS.REMOVE)) {
-			return this.COMMANDS.REMOVE;
+		if (this.matchesCommand(text, REMOVE)) {
+			return REMOVE;
 		}
-		if (this.matchesCommand(text, this.COMMANDS.DETAILS)) {
-			return this.COMMANDS.DETAILS;
+		if (this.matchesCommand(text, DETAILS)) {
+			return DETAILS;
 		}
-		if (this.matchesCommand(text, this.COMMANDS.HELP)) {
-			return this.COMMANDS.HELP;
+		if (this.matchesCommand(text, HELP)) {
+			return HELP;
 		}
 
 		return null;
@@ -566,7 +711,7 @@ refactoring	 * Возвращает e-mail пользователя
 	public async executePostMessageSent(
 		message: IMessage,
 		read: IRead,
-		http: IHttp,
+		_http: IHttp,
 		persistence: IPersistence,
 		modify: IModify
 	): Promise<void> {
@@ -577,74 +722,19 @@ refactoring	 * Возвращает e-mail пользователя
 			senderId: message.sender.id,
 		});
 
-		// Проверяем, что это приватное сообщение (Direct Message)
-		if (message.room.type !== 'd') {
-			this.getLogger().debug('Сообщение не является приватным, игнорируем');
-			return;
-		}
-
-		// Игнорируем сообщения от самого бота
-		const appUser = await read.getUserReader().getAppUser();
-		if (!appUser || message.sender.id === appUser.id) {
-			this.getLogger().debug('Сообщение от самого бота, игнорируем');
+		if (!(await this.shouldProcessMessage(message, read))) {
 			return;
 		}
 
 		const text = message.text?.trim() || '';
-		if (!text) {
-			this.getLogger().debug('Пустое сообщение, игнорируем');
+		const commandType = this.getCommandType(text);
+
+		if (commandType) {
+			this.getLogger().debug('Обнаружена команда', { commandType });
+			await this.executeCommand(commandType, message, read, persistence, modify);
 			return;
 		}
 
-		// Обрабатываем команды
-		const commandType = this.getCommandType(text);
-		if (commandType) {
-			this.getLogger().debug('Обнаружена команда', { commandType });
-
-			switch (commandType) {
-				case this.COMMANDS.ADD:
-					await this.handleAddCommand(message, read, persistence, modify);
-					return;
-
-				case this.COMMANDS.MULTI_ADD:
-					await this.handleMultiAddCommand(message, read, persistence, modify);
-					return;
-
-				case this.COMMANDS.REMOVE:
-					await this.handleRemoveCommand(message, read, persistence, modify);
-					return;
-
-				case this.COMMANDS.DETAILS:
-					await this.handleDetailsCommand(message, read, modify);
-					return;
-
-				case this.COMMANDS.HELP:
-					await this.handleHelpCommand(modify, message.room);
-					return;
-			}
-		}
-
-		// Иначе обрабатываем как ключ для поиска
-		const key = text;
-		this.getLogger().debug('Обработка ключа', { key, senderId: message.sender.id });
-
-		// Получаем значения для ключа из БД
-		const values = await this.getValuesForKey(read, key);
-
-		if (values && values.length > 0) {
-			// Если значения найдены, отправляем их
-			this.getLogger().debug('Найдены значения для ключа', { key, count: values.length });
-			await this.sendValuesToUser(modify, message.room, key, values);
-		} else {
-			// Если значений нет, предлагаем добавить
-			this.getLogger().debug('Значения не найдены, предлагаем добавить', { key });
-			await this.sendMessage(
-				modify,
-				message.room,
-				`Значение для ключа "*${key}*" не найдено.\n\n` +
-				`Чтобы добавить значение, используйте команду:\n` +
-				`\`!add ${key}: <ваше значение>\``
-			);
-		}
+		await this.handleKeySearch(text, read, modify, message.room);
 	}
 }
