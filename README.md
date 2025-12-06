@@ -66,9 +66,9 @@ _Замечания и предложения - приветствуются._
 
 ## Установка
 ### Требования
-- Node.js 14 или выше
-- Rocket.Chat сервер с Apps Engine 1.31.0
-- @rocket.chat/apps-cli (установить глобально: `npm install -g '@rocket.chat/apps-cli@1.12.0'`)
+- Node.js 22 или выше
+- Rocket.Chat сервер с Apps Engine от 1.44.0
+- @rocket.chat/apps-cli (установить глобально: `npm install -g '@rocket.chat/apps-cli@1.13.0'`)
 
 _Приложение создано командой rc-apps create_
 

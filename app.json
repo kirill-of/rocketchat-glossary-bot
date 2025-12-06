@@ -1,7 +1,7 @@
 {
     "id": "3e8b376d-fa31-49c6-babe-c438b0d1777b",
     "version": "0.0.1",
-    "requiredApiVersion": "^1.31.0",
+    "requiredApiVersion": "^1.44.0",
     "iconFile": "icon.png",
     "author": {
         "name": "Kirill Of",
