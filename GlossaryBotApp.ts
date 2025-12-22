@@ -8,7 +8,8 @@ import {
 } from '@rocket.chat/apps-engine/definition/accessors';
 import { App } from '@rocket.chat/apps-engine/definition/App';
 import { IAppInfo, RocketChatAssociationModel, RocketChatAssociationRecord } from '@rocket.chat/apps-engine/definition/metadata';
-import { IMessage, IPostMessageSent } from '@rocket.chat/apps-engine/definition/messages';
+import { IMessage } from '@rocket.chat/apps-engine/definition/messages';
+import { IPostMessageSentToBot } from "@rocket.chat/apps-engine/definition/messages/IPostMessageSentToBot";
 import { IRoom } from '@rocket.chat/apps-engine/definition/rooms';
 import { IUser } from '@rocket.chat/apps-engine/definition/users';
 
@@ -34,7 +35,7 @@ interface AddValueResult {
 
 type CommandType = 'add' | 'multi-add' | 'remove' | 'details' | 'help' | null;
 
-export default class GlossaryBotApp extends App implements IPostMessageSent {
+export default class GlossaryBotApp extends App implements IPostMessageSentToBot {
 	private static readonly COMMAND_PREFIX = '!' as const;
 	private static readonly ROOM_TYPE_DIRECT = 'd' as const;
 
@@ -708,7 +709,7 @@ export default class GlossaryBotApp extends App implements IPostMessageSent {
 		return null;
 	}
 
-	public async executePostMessageSent(
+	public async executePostMessageSentToBot(
 		message: IMessage,
 		read: IRead,
 		_http: IHttp,
